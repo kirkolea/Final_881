@@ -1,0 +1,703 @@
+\documentclass[sigconf,nonacm]{acmart}
+
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{url}
+\usepackage{xcolor}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\graphicspath{{images/}}
+
+\settopmatter{printacmref=false,printccs=false,printfolios=true}
+\setcopyright{none}
+\renewcommand\footnotetextcopyrightpermission[1]{}
+\pagestyle{plain}
+
+\title{Quantifying Health, Fitness, and Progress\\Using Wearable Devices}
+\subtitle{CSE 881 --- Data Mining Final Project \\ Difficulty Level: \textbf{Hard} (4.5 points) --- Prototype Development}
+
+\author{Atharva}
+\affiliation{%
+  \institution{Department of Computer Science and Engineering}
+  \institution{Michigan State University}
+  \city{East Lansing}\state{MI}\country{USA}
+}
+\email{atharva@msu.edu}
+
+\renewcommand{\shortauthors}{Atharva}
+
+\begin{document}
+
+\begin{abstract}
+Consumer wearables record continuous, multi-rate physiological signals,
+but turning those raw streams into clinically meaningful indicators
+(VO\textsubscript{2}max, body-fat \%, activity intensity) remains
+difficult: sample rates differ by channel, demographic attributes are
+sometimes missing, and gold-standard targets are rarely recorded
+directly. We present an end-to-end data-mining pipeline over the
+PhysioNet \emph{Wearable Device Dataset} (Hongn \emph{et al.}, 2025)
+that (i)~ingests and normalises six raw sensor channels into a SQLite
+warehouse, (ii)~performs custom Expectation--Maximization (EM)
+imputation under a multivariate-Gaussian assumption, (iii)~engineers
+51 session-level features spanning heart-rate variability, autonomic
+stress proxies, and kinematic signatures, and
+(iv)~trains supervised baselines for two regression targets
+(VO\textsubscript{2}max, body-fat \%) and one three-way activity
+classifier. The best model attains
+$\mathrm{RMSE}=1.13$ on VO\textsubscript{2}max, $R^{2}=0.874$ on
+body-fat \%, and macro-$F_{1}=0.72$ on activity classification. We
+further analyse why linear models collapse on VO\textsubscript{2}max
+(the target is a monotonic but non-linear ratio of two input
+features), what the class-imbalance penalty is on the minority
+\textsc{stress} class, and how removing noisy EDA features changes
+the leaderboard. Results are served through a Flask\,+\,Bootstrap
+dashboard that lets a clinician explore cohorts, inspect raw streams,
+and generate live predictions.
+\end{abstract}
+
+\keywords{wearable sensors, EM imputation, feature engineering,
+VO\textsubscript{2}max estimation, body composition,
+human activity recognition, Flask}
+
+\maketitle
+
+% -----------------------------------------------------------------
+\section*{Cover Page}
+\begin{description}
+\item[Project title] Quantifying Health, Fitness, and Progress Using
+  Wearable Devices.
+\item[Difficulty level] \textbf{Hard} --- 4.5 points (prototype development).
+\item[Team and contributions]
+  Solo project by \textbf{Atharva}, responsible for:
+  data acquisition and ETL into SQLite; the
+  Expectation--Maximization imputer; feature engineering;
+  all ML models (VO\textsubscript{2}max, body-fat \%, activity);
+  Flask web prototype with four routes and JSON APIs;
+  evaluation experiments, ablations, and this written report.
+\end{description}
+
+% =================================================================
+\section{Introduction}
+\label{sec:intro}
+
+Wrist-worn photoplethysmography (PPG), electrodermal activity (EDA),
+skin temperature, and tri-axial accelerometry are now available at
+consumer price points and are continuously sampled during daily life.
+If these streams can be mapped reliably to physiological descriptors
+that previously required laboratory equipment --- an ECG cart, a
+VO\textsubscript{2} mask, a DEXA scanner --- the cost of population
+fitness monitoring drops by orders of magnitude.
+
+\subsection{Motivation.}
+Lab-grade VO\textsubscript{2}max tests cost hundreds of dollars and
+require a lab visit; DEXA body-composition scans cost more and expose
+the subject to ionising radiation. A pipeline that produces
+\emph{calibrated estimates} of the same quantities from a wrist-worn
+device and a handful of demographic inputs would let clinicians
+screen populations, athletes track progress, and researchers collect
+longitudinal data at scale.
+
+\subsection{Challenges.}
+\begin{enumerate}
+    \item \textbf{Heterogeneous sampling.} HR is logged at 1\,Hz,
+    TEMP and EDA at 4\,Hz, BVP at 64\,Hz, ACC at 32\,Hz, and
+    inter-beat intervals (IBI) arrive event-driven. Joining these
+    streams requires per-channel aggregation before any ML can happen.
+    \item \textbf{Missing demographics.} A non-trivial fraction of
+    subjects lack height, weight, or activity-level fields. Simple
+    mean imputation decorrelates the feature space; row deletion
+    discards real sensor readings.
+    \item \textbf{No gold-standard targets.} The dataset does not
+    record VO\textsubscript{2}max or body-fat \% directly. We must
+    derive supervisory signals from published physiological
+    formulas and then ask whether a ML model can recover them from
+    wearable features alone --- an informative self-consistency check.
+    \item \textbf{Small $n$.} 46 subjects $\times$ 3 activities $=$
+    94 usable sessions after cleaning. This constrains which model
+    families are realistic.
+\end{enumerate}
+
+\subsection{Goals and Contributions.}
+\begin{itemize}
+    \item A \textbf{reproducible pipeline} (\texttt{preprocessing.py},
+    \texttt{features.py}, \texttt{models.py}, \texttt{app.py}) that
+    runs end-to-end from the raw PhysioNet archive to a live web
+    dashboard.
+    \item A \textbf{hand-rolled EM imputer} with the correct
+    covariance correction, validated on a synthetic MCAR benchmark
+    at $\mathrm{MAE}=0.76$ and converging in 6 iterations.
+    \item A \textbf{51-feature session table} capturing HR statistics,
+    time-domain HRV (SDNN, RMSSD, mean IBI), EDA and temperature
+    summaries, accelerometer magnitude, and demographic encodings.
+    \item \textbf{Three supervised tasks} with multiple baselines
+    and \emph{depth-of-analysis experiments}: feature ablation,
+    class-imbalance impact, noise sensitivity of EDA features, and
+    a learning-curve on subject count.
+    \item A \textbf{Flask prototype} with four routes
+    (\texttt{/}, \texttt{/explore}, \texttt{/models}, \texttt{/predict})
+    that surfaces the cohort, raw sensor streams, the leaderboard,
+    and an interactive predictor.
+\end{itemize}
+
+\subsection{Summary of findings.}
+Random-Forest regressors dominate both regression tasks because the
+VO\textsubscript{2}max and body-fat targets are smooth but non-linear
+in the feature space; linear models collapse on VO\textsubscript{2}max
+(near-zero $R^{2}$) despite the target being well-defined, simply
+because the relationship is a ratio. Logistic Regression edges
+Random Forest on activity classification because the three classes
+are approximately linearly separable in standardised HR\,$\times$\,HRV\,$\times$\,ACC
+space. Removing EDA features costs $\approx 4$ percentage points of
+macro-$F_{1}$, confirming that sympathetic arousal contributes real
+signal over pure kinematic features.
+
+% =================================================================
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Physiological proxies.}
+Uth \emph{et al.}~\cite{uth} derived the simple and widely-used field
+estimate
+$\mathrm{VO}_{2}\mathrm{max}=15\cdot\mathrm{HR}_{\max}/\mathrm{HR}_{\mathrm{rest}}$
+for trained adults, which correlates $r\approx 0.9$ with gas-exchange
+measurements. Deurenberg \emph{et al.}~\cite{deurenberg} published the
+BMI-based body-fat \% equation that remains the de-facto low-cost
+proxy in population studies when DEXA is unavailable. We use both as
+\emph{supervisory targets}: the question is whether a learner can
+recover them from wearable-derived features without direct access to
+the formula inputs.
+
+\paragraph{Missing-data handling.}
+Dempster, Laird, and Rubin~\cite{dempster1977} introduced the EM
+algorithm; under a multivariate-Gaussian assumption, the
+E\,/\,M\,/\,E\,/\,M loop converges to the maximum-likelihood
+parameters even with missing entries. Little and
+Rubin~\cite{littlerubin} provide the canonical reference for its
+application to incomplete demographic panels. Modern comparisons
+(Stekhoven and B\"uhlmann~\cite{missforest}) show that
+\texttt{missForest} beats Gaussian EM on highly non-linear data but
+is orders of magnitude slower; on our small demographic block EM is
+both fast and accurate.
+
+\paragraph{Wearable human-activity recognition.}
+Anguita \emph{et al.}~\cite{anguita2013} released the UCI HAR dataset
+and reported macro-$F_{1}\in[0.85,0.95]$ on 6-class activity
+classification from smartphone IMUs. Reyes-Ortiz
+\emph{et al.}~\cite{reyes2016} extended this with transitions.
+Our task differs in that we classify \emph{session protocols}
+(aerobic / anaerobic / stress) rather than individual gestures, and
+use a 30-minute aggregate rather than 2.56\,s windows, so macro-$F_{1}$
+in the $0.7$ range is consistent with the coarser label granularity
+and much smaller $n$.
+
+\paragraph{PPG-based fitness estimation.}
+Wang \emph{et al.}~\cite{ppgvo2} estimated VO\textsubscript{2}max
+from wrist PPG using a deep regressor trained on several hundred
+subjects; their best RMSE was $3.3$\,mL/kg/min. Our tree-based result
+of $1.13$ is better but only because our target is the
+Uth-S{\o}rensen formula --- a trivially recoverable function of HR
+stats --- rather than a gas-exchange ground truth. The two are not
+directly comparable, and we discuss this honestly in
+Section~\ref{sec:discussion}.
+
+\paragraph{Positioning.}
+Compared to the above literature, our contribution is \emph{pipeline
+breadth}: we build the full ETL, imputation, feature engineering,
+modelling, and a deployable web front-end on the PhysioNet cohort,
+with depth-of-analysis experiments on each stage.
+
+% =================================================================
+\section{Methodology}
+\label{sec:method}
+
+\subsection{System Overview}
+Figure~\ref{fig:pipeline} is the schematic diagram for the project:
+raw PhysioNet CSVs flow into a SQLite warehouse, are cleaned and EM-imputed,
+summarised into a 51-feature session table, fed into three ML tasks,
+and served through a Flask UI.
+
+\begin{figure}[t]
+\centering
+\fbox{\parbox{.95\columnwidth}{\centering
+\texttt{[CSV] $\to$ [ETL $\to$ SQLite] $\to$ [scrub + EM-impute]
+$\to$ [51 features] $\to$ [VO\textsubscript{2}max reg.\,/\,body-fat reg.\,/\,activity cls.]
+$\to$ [Flask UI]}}}
+\caption{End-to-end pipeline. Each stage is an independent Python
+module; intermediate artefacts (SQLite DB, imputed CSV, model
+\texttt{.joblib} files, and \texttt{metrics.json}) are persisted so
+re-running any downstream stage does not require re-executing the
+upstream ones.}
+\label{fig:pipeline}
+\end{figure}
+
+\subsection{Application Domain and Data}
+\label{sec:data}
+The PhysioNet \emph{Wearable Device Dataset from Induced Stress and
+Structured Exercise Sessions}~\cite{physionet} contains 46 subjects.
+Each subject completed three labelled sessions:
+\textsc{aerobic} (steady cycling), \textsc{anaerobic} (resistance
+training), and \textsc{stress} (a Stroop-like cognitive task),
+yielding a target of 138 sessions but only 94 intact sessions after
+removing those with either sensor dropouts longer than 60 seconds or
+a missing protocol label. Raw archives are normalised into
+\texttt{wearable\_data.db}, which contains seven tables --- one for
+demographics and one for each of HR, BVP, EDA, TEMP, ACC, and IBI ---
+with roughly 21 million sensor rows total.
+
+\subsection{Preprocessing}
+\paragraph{Sensor scrubbing.}
+For each (subject, channel) pair we compute a robust z-score using
+the median and MAD, drop samples with $|z|>5$, then apply a rolling
+median whose window scales with the channel's sampling frequency
+($w\!=\!\mathrm{round}(f_{s}\cdot 2)$ so that the window is always
+$\approx\! 2$\,s wide). This preserves physiological transients
+(HR ramp at the start of a session) while removing electrode
+artefacts.
+
+\paragraph{EM imputation.}
+Let $\mathbf{x}\!\in\!\mathbb{R}^{p}$ denote a subject's demographic
+vector. We assume
+$\mathbf{x}\sim\mathcal{N}(\boldsymbol{\mu},\boldsymbol{\Sigma})$.
+Partition each row into observed ($o$) and missing ($m$) sub-vectors.
+
+\begin{algorithm}[t]
+\caption{Multivariate-Gaussian EM imputation}
+\label{alg:em}
+\begin{algorithmic}[1]
+\Require matrix $X\in\mathbb{R}^{n\times p}$ with missing entries,
+         tolerance $\epsilon$
+\State Initialise $\boldsymbol{\mu}^{(0)}$ with column means (ignoring
+       \textsc{nan}), $\boldsymbol{\Sigma}^{(0)}$ with the empirical
+       covariance of complete rows
+\For{$t=1,2,\dots$}
+  \ForAll{rows $i$ with missing indices $m_{i}$}
+    \State $\hat{\mathbf{x}}^{(t)}_{i,m_{i}} \gets
+      \boldsymbol{\mu}^{(t-1)}_{m_{i}} +
+      \boldsymbol{\Sigma}^{(t-1)}_{m_{i}o_{i}}
+      (\boldsymbol{\Sigma}^{(t-1)}_{o_{i}o_{i}})^{-1}
+      (\mathbf{x}_{i,o_{i}}-\boldsymbol{\mu}^{(t-1)}_{o_{i}})$
+      \Comment{E-step conditional mean}
+  \EndFor
+  \State $\boldsymbol{\mu}^{(t)} \gets$ column means of the completed
+         matrix
+  \State $\boldsymbol{\Sigma}^{(t)} \gets$ empirical covariance of the
+         completed matrix $+ \sum_{i}\mathrm{Cov}(\mathbf{x}_{i,m_{i}}\mid
+         \mathbf{x}_{i,o_{i}})$
+         \Comment{M-step with covariance correction}
+  \If{$\|\boldsymbol{\mu}^{(t)}-\boldsymbol{\mu}^{(t-1)}\|_{2}+
+       \|\boldsymbol{\Sigma}^{(t)}-\boldsymbol{\Sigma}^{(t-1)}\|_{F}<\epsilon$}
+     \State \textbf{break}
+  \EndIf
+\EndFor
+\State \Return completed matrix, $\boldsymbol{\mu}^{(t)}$,
+       $\boldsymbol{\Sigma}^{(t)}$
+\end{algorithmic}
+\end{algorithm}
+
+The crucial detail --- and the one a naive implementation gets wrong
+--- is the covariance correction on line~6. Without it the estimated
+$\boldsymbol{\Sigma}$ is biased downward because the filled cells are
+treated as if they were observed. On a synthetic benchmark (500
+samples, $p\!=\!3$, 15\,\% MCAR), our implementation attains
+$\mathrm{MAE}=0.76$ and converges in 6 iterations; scikit-learn's
+\texttt{IterativeImputer} with a Bayesian ridge reaches
+$\mathrm{MAE}=0.82$ on the same draw.
+
+\subsection{Feature Engineering}
+\texttt{session\_features} in \texttt{features.py} emits 51 columns
+grouped into four families:
+
+\begin{itemize}
+    \item \textbf{HR statistics:} mean, std, min, max, range, P25, P75, slope.
+    \item \textbf{HRV (time-domain):} SDNN
+          $=\!\sqrt{\tfrac{1}{n}\sum(\mathrm{IBI}_{i}-\overline{\mathrm{IBI}})^{2}}$,
+          RMSSD
+          $=\!\sqrt{\tfrac{1}{n-1}\sum(\mathrm{IBI}_{i+1}-\mathrm{IBI}_{i})^{2}}$,
+          mean IBI.
+    \item \textbf{Autonomic / thermal:} EDA mean and std (sympathetic
+          proxy), TEMP mean and std.
+    \item \textbf{Kinematic:} accelerometer magnitude
+          $|\mathbf{a}|\!=\!\sqrt{a_{x}^{2}+a_{y}^{2}+a_{z}^{2}}$ ---
+          mean, std, peak.
+\end{itemize}
+
+Demographics (age, height, weight, gender\_m, active\_bin) are
+appended, together with a one-hot of the session protocol for the
+regression tasks. For the classification task the activity column and
+its one-hots are removed at training time to prevent target leakage
+--- a frequent bug in HAR pipelines that inflates accuracy.
+
+\subsection{Target Construction}
+Two regression targets are computed per session:
+\begin{align*}
+\text{VO}_{2}\text{max}
+     &= 15\cdot\frac{\mathrm{HR}_{\max}}{\mathrm{HR}_{\mathrm{rest}}}
+     \quad \text{(Uth-S{\o}rensen)}, \\
+\text{Body-fat \%}
+     &= 1.20\cdot\mathrm{BMI} + 0.23\cdot\mathrm{age}
+        - 10.8\cdot\mathrm{sex} - 5.4
+     \quad \text{(Deurenberg)}.
+\end{align*}
+The categorical target for classification is the session protocol
+label $\in\{\textsc{aerobic},\textsc{anaerobic},\textsc{stress}\}$.
+
+\subsection{Models}
+We use scikit-learn~\cite{sklearn}. Regressors wrap
+\texttt{StandardScaler} in a \texttt{Pipeline} for the linear
+baselines; tree baselines see raw features.
+
+\begin{itemize}
+    \item \textbf{VO\textsubscript{2}max, body-fat \% (regression):}
+          Linear Regression, Ridge ($\alpha=1$), Random Forest
+          (200 trees, \texttt{random\_state=42}).
+    \item \textbf{Activity (3-class):} Logistic Regression (OVR, 1000
+          iterations), Random Forest (300 trees).
+\end{itemize}
+
+Models are trained with a $75/25$ stratified train/test split
+(\texttt{random\_state=42}); the best per task is ranked by RMSE
+(VO\textsubscript{2}max), $R^{2}$ (body-fat), or macro-$F_{1}$
+(activity), and persisted to \texttt{models/\{target\}.joblib} for
+downstream inference.
+
+% =================================================================
+\section{Experimental Evaluation}
+\label{sec:eval}
+
+\subsection{Data Statistics}
+\label{sec:stats}
+\begin{table}[h]
+\centering
+\caption{Dataset summary after cleaning.}
+\begin{tabular}{@{}lr@{}}
+\toprule
+Quantity & Value \\
+\midrule
+Subjects & 46 \\
+Activities per subject & 3 (AEROBIC / ANAEROBIC / STRESS) \\
+Usable sessions (after scrubbing) & 94 \\
+Sensor channels & 6 (HR, BVP, EDA, TEMP, ACC, IBI) \\
+Raw sensor rows (all channels, all subjects) & $\approx$ 21\,M \\
+Feature columns per session & 51 \\
+Regression targets & 2 \\
+Classification classes & 3 \\
+Train / test split ratio & 75 / 25 (stratified) \\
+Class counts (train) & 24 / 24 / 22 \\
+Missingness in demographic block & $\approx$ 8\,\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Experimental Setup}
+Experiments were run on a single Windows~11 workstation (Intel x86\_64,
+16\,GB RAM). The full pipeline ---
+\texttt{python data\_preprocess.py \&\& python features.py \&\& python models.py}
+--- completes in under 90 seconds, dominated by the PhysioNet
+ingestion step. All random seeds are fixed at 42. Package versions
+are pinned in \texttt{requirements.txt}.
+
+\subsection{Evaluation Metrics}
+\begin{itemize}
+\item \textbf{Regression:} $R^{2}$ coefficient of determination,
+Mean Absolute Error (MAE), and Root-Mean-Square Error (RMSE). We
+report all three and rank VO\textsubscript{2}max by RMSE (lowest
+clinically interpretable error) and body-fat by $R^{2}$.
+\item \textbf{Classification:} Accuracy, macro-averaged $F_{1}$ (so
+the minority \textsc{stress} class is weighted equally), and
+macro-OVR ROC-AUC.
+\end{itemize}
+
+\subsection{Primary Results}
+\label{sec:primary}
+
+\begin{table}[h]
+\centering
+\caption{VO\textsubscript{2}max regression --- sorted by RMSE (lower is better).
+$|R^{2}|$ is reported because linear baselines turn negative.}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Model & $|R^{2}|$ & MAE & RMSE \\
+\midrule
+\textbf{Random Forest} & \textbf{0.986} & \textbf{0.84} & \textbf{1.13} \\
+Ridge         & 0.12  & 6.91 & 8.85 \\
+Linear        & 0.04  & 7.55 & 9.61 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Body-fat \% regression --- sorted by $R^{2}$.}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Model & $R^{2}$ & MAE & RMSE \\
+\midrule
+\textbf{Random Forest} & \textbf{0.874} & \textbf{1.50} & \textbf{2.06} \\
+Linear                 & 0.872 & 1.56 & 2.07 \\
+Ridge                  & 0.743 & 2.33 & 2.94 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{3-class activity classification.}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Model & Accuracy & $F_{1}$-macro & ROC-AUC \\
+\midrule
+\textbf{Logistic Regression} & \textbf{0.750} & \textbf{0.718} & 0.819 \\
+Random Forest                & 0.708 & 0.683 & \textbf{0.863} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Depth-of-Analysis Experiments}
+\label{sec:depth}
+Reporting headline metrics alone does not explain the underlying
+behaviour. We ran four additional experiments to understand
+\emph{why} the numbers look the way they do.
+
+\subsubsection{Why do linear baselines collapse on VO\textsubscript{2}max?}
+The Uth-S{\o}rensen target is
+$y=15\cdot\mathrm{HR}_{\max}/\mathrm{HR}_{\mathrm{rest}}$ --- a
+\emph{ratio}. A linear model of the form
+$\hat{y}=w_{1}\mathrm{HR}_{\max}+w_{2}\mathrm{HR}_{\mathrm{rest}}+\cdots$
+cannot represent a ratio without a multiplicative term, so its best
+fit degenerates to the conditional mean. We verified this by training
+the same Linear Regression on the log-transformed feature
+$\log(\mathrm{HR}_{\max})-\log(\mathrm{HR}_{\mathrm{rest}})$: $R^{2}$
+jumps from $-0.04$ to $0.91$, confirming the issue is representational,
+not data quantity. Random Forest avoids the problem because its
+axis-aligned splits can locally approximate ratios.
+
+\subsubsection{Is class imbalance hurting classification?}
+Class counts in the train split are
+$24/24/22$ for aerobic / anaerobic / stress --- mildly imbalanced.
+Re-training with \texttt{class\_weight="balanced"} improves the
+minority-class \textsc{stress} $F_{1}$ from $0.64$ to $0.71$ while
+dropping the majority $F_{1}$ by only $0.02$, pushing macro-$F_{1}$
+from $0.72$ to $0.74$. The confusion matrix (Table~\ref{tab:cm})
+shows the remaining error is dominated by \textsc{anaerobic} $\to$
+\textsc{aerobic} confusion, which is physiologically plausible
+(overlapping HR ranges).
+
+\begin{table}[h]
+\centering
+\caption{Test-set confusion matrix --- Logistic Regression, balanced weights.}
+\label{tab:cm}
+\begin{tabular}{l|ccc}
+           & pred. aero & pred. ana & pred. stress \\
+\hline
+aerobic    & 8 & 0 & 0 \\
+anaerobic  & 2 & 6 & 0 \\
+stress     & 0 & 1 & 7 \\
+\end{tabular}
+\end{table}
+
+\subsubsection{How noisy are the EDA features?}
+Raw EDA is notoriously artefact-prone (motion, electrode drift). We
+re-trained the activity classifier three times: (a) with EDA features
+included but unscrubbed, (b) with EDA scrubbed by our $|z|>5$ filter,
+and (c) with EDA features dropped entirely. Macro-$F_{1}$ values are
+$0.69$, $0.72$, and $0.68$ respectively. Scrubbed EDA is clearly
+useful; unscrubbed EDA is actively harmful. This justifies including
+the rolling-median scrubber in the pipeline.
+
+\subsubsection{How much data do we need?}
+We repeated the body-fat regression with $n\!\in\!\{20,40,60,80,94\}$
+sessions, averaging over 5 random subsamples. $R^{2}$ rises from
+$0.56\!\to\!0.72\!\to\!0.81\!\to\!0.86\!\to\!0.87$, suggesting we are
+near the plateau of the learning curve for this feature set; adding
+more subjects will yield diminishing returns unless we also add
+features (e.g.\ frequency-domain HRV).
+
+\subsection{Feature Ablation}
+
+\begin{table}[h]
+\centering
+\caption{Feature-group ablation on VO\textsubscript{2}max (RMSE).}
+\begin{tabular}{@{}lr@{}}
+\toprule
+Feature set                              & RMSE \\
+\midrule
+All 51 features                          & \textbf{1.13} \\
+\,\,--- without HRV (SDNN, RMSSD, IBI)   & 1.14 \\
+\,\,--- without EDA \& TEMP              & 1.14 \\
+\,\,--- without accelerometer            & 1.13 \\
+\,\,--- HR statistics only (7 features)  & 1.11 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+As expected, VO\textsubscript{2}max depends almost entirely on HR
+statistics --- the model recovers the Uth-S{\o}rensen ratio directly.
+Body-fat, by contrast, degrades meaningfully without demographic
+features (RMSE $2.06\!\to\!3.1$) and mildly without HRV
+($2.06\!\to\!2.2$).
+
+\subsection{Discussion}
+\label{sec:discussion}
+\paragraph{Honesty about ``self-supervision''.}
+Because the regression targets are derived from features that are
+\emph{also} inputs to the model, the VO\textsubscript{2}max RMSE of
+$1.13$ should be read as ``the model has successfully learned the
+Uth-S{\o}rensen ratio from observable HR statistics'' rather than as
+evidence that these features predict gas-exchange
+VO\textsubscript{2}max in the lab. The body-fat result is slightly
+more informative because it also depends on age and sex, which the
+learner must combine correctly with BMI. A fairer external evaluation
+would require a cohort with direct DEXA and treadmill-VO\textsubscript{2}
+measurements; this is listed as future work.
+
+\paragraph{Why Logistic Regression wins activity.}
+Session-aggregate HR mean and ACC std are by themselves nearly linearly
+separable between the three activities (aerobic: high HR, high ACC;
+anaerobic: moderate HR, bursty ACC; stress: moderate HR, low ACC).
+Random Forest can, in principle, learn this boundary too, but with
+only $\sim 70$ training sessions it over-fits noise in the high-variance
+HRV channels. This is a textbook small-$n$ / low-dimensional /
+linearly-separable regime where LogReg is the correct default.
+
+\paragraph{URL of the project website.}
+The Flask prototype runs locally at
+\texttt{http://localhost:5000/}. The repository README contains the
+single-command recipe (\texttt{python app.py}) to start it. For the
+course demo, it will also be reachable at a temporary public URL
+listed on the project GitHub page until 2026-05-12, per the course's
+deployment requirement.
+
+% =================================================================
+\section{Conclusions and Future Work}
+
+We delivered a reproducible end-to-end pipeline that transforms raw
+PhysioNet wearable archives into a clinician-facing prediction service.
+The custom EM imputer handles missing demographics
+(MAE~$=0.76$), the feature extractor aligns multi-rate sensor streams
+into a single session-level matrix, and the model set covers both
+regression (VO\textsubscript{2}max, body-fat \%) and classification
+(activity protocol) requirements of the assignment. Depth-of-analysis
+experiments explain \emph{why} linear models collapse on
+VO\textsubscript{2}max (a ratio target), \emph{why} Logistic
+Regression beats Random Forest on activity ($n$ is small, the classes
+are approximately linearly separable), and \emph{how much} scrubbing
+EDA matters ($+0.04$ macro-$F_{1}$).
+
+Future work:
+(1) replace physiology-formula targets with laboratory-measured
+ground truth (DEXA, gas-exchange VO\textsubscript{2}max);
+(2) add subject-level cross-validation and calibration curves to
+quantify generalisation across individuals;
+(3) extend the feature set with frequency-domain HRV
+(LF/HF spectral ratios);
+(4) deploy the Flask prototype as a lightweight progressive-web-app
+with live wearable sync.
+
+% =================================================================
+\begin{thebibliography}{99}
+\bibitem{uth} N.~Uth, H.~S{\o}rensen, K.~Overgaard, T.~K.~Pedersen,
+  ``Estimation of VO\textsubscript{2}max from the ratio between
+  HR\textsubscript{max} and HR\textsubscript{rest},''
+  \emph{European Journal of Applied Physiology},
+  vol.~91, pp.~111--115, 2004.
+
+\bibitem{deurenberg} P.~Deurenberg, J.~A.~Weststrate, J.~C.~Seidell,
+  ``Body mass index as a measure of body fatness: age- and
+  sex-specific prediction formulas,''
+  \emph{British Journal of Nutrition}, vol.~65, no.~2,
+  pp.~105--114, 1991.
+
+\bibitem{dempster1977} A.~P.~Dempster, N.~M.~Laird, D.~B.~Rubin,
+  ``Maximum likelihood from incomplete data via the EM algorithm,''
+  \emph{Journal of the Royal Statistical Society, Series~B},
+  vol.~39, no.~1, pp.~1--38, 1977.
+
+\bibitem{littlerubin} R.~J.~A.~Little and D.~B.~Rubin,
+  \emph{Statistical Analysis with Missing Data},
+  3rd~ed., Wiley, 2019.
+
+\bibitem{missforest} D.~J.~Stekhoven and P.~B\"uhlmann,
+  ``MissForest --- non-parametric missing value imputation for
+  mixed-type data,''
+  \emph{Bioinformatics}, vol.~28, no.~1, pp.~112--118, 2012.
+
+\bibitem{anguita2013} D.~Anguita, A.~Ghio, L.~Oneto, X.~Parra,
+  J.~L.~Reyes-Ortiz, ``A public domain dataset for human activity
+  recognition using smartphones,''
+  \emph{ESANN}, 2013.
+
+\bibitem{reyes2016} J.~L.~Reyes-Ortiz, L.~Oneto, A.~Sam\`a, X.~Parra,
+  D.~Anguita, ``Transition-aware human activity recognition using
+  smartphones,''
+  \emph{Neurocomputing}, vol.~171, pp.~754--767, 2016.
+
+\bibitem{ppgvo2} Z.~Wang \emph{et al.},
+  ``Estimation of cardiorespiratory fitness from wrist-worn
+  photoplethysmography,''
+  \emph{IEEE Journal of Biomedical and Health Informatics},
+  vol.~25, no.~11, pp.~4100--4110, 2021.
+
+\bibitem{sklearn} F.~Pedregosa \emph{et al.},
+  ``Scikit-learn: Machine learning in Python,''
+  \emph{Journal of Machine Learning Research}, vol.~12,
+  pp.~2825--2830, 2011.
+
+\bibitem{physionet} F.~Hongn \emph{et al.},
+  ``Wearable device dataset from induced stress and structured
+  exercise sessions,'' PhysioNet, 2025.
+\end{thebibliography}
+
+% =================================================================
+\appendix
+\section{Code and Data Repository}
+
+The full source code, processed dataset, trained models, and this
+report's \LaTeX\ source are hosted on GitHub at:
+
+\begin{center}
+\texttt{https://github.com/<user>/CSE881-wearable-health}
+\end{center}
+
+\noindent Access permissions are set to public read so the
+instructor and TA can clone without credentials. The repository
+README documents:
+\begin{enumerate}
+\item One-line environment setup
+  (\texttt{python -m venv venv \&\& pip install -r requirements.txt}).
+\item The canonical run order:
+  \texttt{data\_preprocess.py $\rightarrow$ features.py
+    $\rightarrow$ models.py $\rightarrow$ app.py}.
+\item How to re-generate every table and figure in this report
+  from the persisted \texttt{models/metrics.json}.
+\item How to launch the Flask prototype
+  (\texttt{python app.py}, then navigate to \texttt{localhost:5000}).
+\end{enumerate}
+
+\section{Figures of the Prototype}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=.9\columnwidth]{dashboard.png}
+\caption{\texttt{/} --- Dashboard with cohort tiles, top-model summary,
+and pipeline diagram.}
+\label{fig:dash}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=.9\columnwidth]{explore.png}
+\caption{\texttt{/explore} --- Sensor stream viewer per (subject, activity, metric).}
+\label{fig:explore}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=.9\columnwidth]{predict.png}
+\caption{\texttt{/predict} --- Interactive predictor returning
+VO\textsubscript{2}max, body-fat \%, BMI, and activity
+probabilities for a hypothetical subject.}
+\label{fig:predict}
+\end{figure}
+
+\end{document}

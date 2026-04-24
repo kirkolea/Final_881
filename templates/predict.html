@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-header">
+  <h2>Health Estimator</h2>
+  <p>Select a subject and activity to run the full pipeline and get health predictions.</p>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-4">
+    <div class="card mb-3">
+      <div class="card-header">Session Inputs</div>
+      <div class="card-body">
+        <div class="mb-3">
+          <label class="form-label" style="font-size:.82rem; font-weight:600; color:#6c757d; text-transform:uppercase; letter-spacing:.04em;">Subject</label>
+          <select id="subject" class="form-select form-select-sm">
+            {% for s in subjects %}<option>{{ s }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" style="font-size:.82rem; font-weight:600; color:#6c757d; text-transform:uppercase; letter-spacing:.04em;">Activity</label>
+          <select id="activity" class="form-select form-select-sm">
+            {% for a in activities %}<option>{{ a }}</option>{% endfor %}
+          </select>
+        </div>
+        <button id="goBtn" class="btn btn-primary w-100">Run Prediction</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">Resolved Inputs</div>
+      <div class="card-body" id="inputs" style="font-size:.9rem;">
+        <span class="text-muted">Run a prediction first.</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-8">
+    <!-- Top stat tiles: VO2, Body Fat, BMI -->
+    <div class="row g-3 mb-3">
+      <div class="col-md-4">
+        <div class="stat-tile">
+          <div class="stat-label">VO2 max</div>
+          <div class="stat-value" id="vo2Val">—</div>
+          <div style="font-size:.8rem; color:#6c757d;">mL/kg/min</div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="stat-tile">
+          <div class="stat-label">Body fat</div>
+          <div class="stat-value" id="bfVal">—</div>
+          <div style="font-size:.8rem; color:#6c757d;">percent</div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="stat-tile">
+          <div class="stat-label">BMI</div>
+          <div class="stat-value" id="bmiVal">—</div>
+          <div style="font-size:.8rem; color:#6c757d;">kg/m²</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Activity probabilities as plain text -->
+    <div class="card mb-3">
+      <div class="card-header">Activity Probabilities</div>
+      <div class="card-body" id="probHolder" style="font-size:.9rem; color:#6c757d;">
+        No prediction yet.
+      </div>
+    </div>
+
+    <!-- Resolved inputs card is on the left; nothing more needed on right -->
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function kv(label, value) {
+    const v = (value === null || value === undefined || value === '') ? '—'
+              : (typeof value === 'number' ? value.toFixed(2) : value);
+    return `<div class="d-flex justify-content-between py-1" style="border-bottom:1px solid #f0f0f0;">
+      <span class="text-muted">${label}</span><strong>${v}</strong></div>`;
+  }
+
+  async function predict() {
+    const subject  = document.getElementById('subject').value;
+    const activity = document.getElementById('activity').value;
+
+    document.getElementById('probHolder').innerHTML =
+      '<div class="spinner-border spinner-border-sm text-secondary"></div>';
+
+    const res  = await fetch('/api/predict', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subject, activity }),
+    });
+    const data = await res.json();
+    const p   = data.predictions || {};
+    const t   = data.clinical_estimates || {};
+    const inp = data.inputs || {};
+
+    document.getElementById('vo2Val').textContent =
+      (p.vo2max != null) ? p.vo2max.toFixed(1) : '—';
+    document.getElementById('bfVal').textContent =
+      (p.body_fat_pct != null) ? p.body_fat_pct.toFixed(1) : '—';
+    document.getElementById('bmiVal').textContent =
+      (t.bmi != null) ? t.bmi.toFixed(1) : '—';
+
+    // Activity probs as plain text rows
+    const probs = p.activity_probs || {};
+    const valid = typeof probs === 'object' && !('error' in probs) && Object.keys(probs).length;
+    if (valid) {
+      document.getElementById('probHolder').innerHTML =
+        Object.entries(probs)
+          .map(([label, val]) => kv(label, (val * 100).toFixed(1) + '%'))
+          .join('');
+    } else {
+      document.getElementById('probHolder').innerHTML = '<span class="text-muted">No data.</span>';
+    }
+
+    document.getElementById('inputs').innerHTML =
+      kv('Subject', data.subject) + kv('Activity', data.activity) +
+      kv('Age', inp.age) + kv('Gender', inp.gender) +
+      kv('Height (cm)', inp.height_cm) + kv('Weight (kg)', inp.weight_kg) +
+      kv('HR mean', inp.hr_mean) + kv('HR min', inp.hr_min) + kv('HR max', inp.hr_max);
+  }
+
+  document.getElementById('goBtn').addEventListener('click', predict);
+</script>
+{% endblock %}

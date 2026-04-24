@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-header">
+  <h2>Dataset Explorer</h2>
+  <p>Browse raw sensor streams for any subject, activity, and metric.</p>
+</div>
+
+<div class="card mb-3">
+  <div class="card-body">
+    <div class="row g-3 align-items-end">
+      <div class="col-md-3">
+        <label class="form-label" style="font-size:.82rem; font-weight:600; color:#6c757d; text-transform:uppercase; letter-spacing:.04em;">Subject</label>
+        <select id="subject" class="form-select form-select-sm">
+          {% for s in subjects %}<option>{{ s }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" style="font-size:.82rem; font-weight:600; color:#6c757d; text-transform:uppercase; letter-spacing:.04em;">Activity</label>
+        <select id="activity" class="form-select form-select-sm">
+          {% for a in activities %}<option>{{ a }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" style="font-size:.82rem; font-weight:600; color:#6c757d; text-transform:uppercase; letter-spacing:.04em;">Metric</label>
+        <select id="metric" class="form-select form-select-sm">
+          {% for m in metrics %}<option>{{ m }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3 d-grid">
+        <button id="loadBtn" class="btn btn-primary btn-sm">Load Stream</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-8">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span id="chartTitle">Select a stream above</span>
+        <span id="chartMeta" class="pill pill-gray">—</span>
+      </div>
+      <div class="card-body">
+        <div id="chartHolder" style="min-height:300px; display:flex; align-items:center; justify-content:center; color:#6c757d;">
+          Choose a subject and metric, then press Load Stream.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    <div class="card mb-3">
+      <div class="card-header">Subject Profile</div>
+      <div class="card-body" id="profile" style="font-size:.9rem;">
+        <span class="text-muted">No subject selected.</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">Summary Statistics</div>
+      <div class="card-body" id="quickStats" style="font-size:.9rem;">
+        <span class="text-muted">Load a stream to see stats.</span>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let chart = null;
+
+  function computeStats(arr) {
+    if (!arr.length) return null;
+    const sorted = [...arr].sort((a, b) => a - b);
+    const n = arr.length;
+    const mean = arr.reduce((a, b) => a + b, 0) / n;
+    const std = Math.sqrt(arr.reduce((s, v) => s + (v - mean) ** 2, 0) / n);
+    return { n, mean: mean.toFixed(3), std: std.toFixed(3),
+             min: sorted[0].toFixed(3), max: sorted[n-1].toFixed(3),
+             p25: sorted[Math.floor(n * 0.25)].toFixed(3),
+             p75: sorted[Math.floor(n * 0.75)].toFixed(3) };
+  }
+
+  function kv(label, value) {
+    const v = (value === '' || value === null || value === undefined) ? '—' : value;
+    return `<div class="d-flex justify-content-between py-1" style="border-bottom:1px solid #f0f0f0;">
+      <span class="text-muted">${label}</span><strong>${v}</strong></div>`;
+  }
+
+  async function loadProfile() {
+    const subject = document.getElementById('subject').value;
+    const res = await fetch(`/api/subject_profile?subject=${subject}`);
+    const p = await res.json();
+    const el = document.getElementById('profile');
+    if (!Object.keys(p).length) { el.innerHTML = '<span class="text-muted">No profile.</span>'; return; }
+    const proto = p.protocol ? 'Test Number ' + p.protocol : '—';
+    el.innerHTML = kv('ID', p.subject_id) + kv('Gender', p.gender) + kv('Age', p.age) +
+      kv('Height (cm)', p.height_cm) + kv('Weight (kg)', p.weight_kg) +
+      kv('Active', p.active) + kv('Protocol', proto);
+  }
+
+  async function loadStream() {
+    const subject  = document.getElementById('subject').value;
+    const activity = document.getElementById('activity').value;
+    const metric   = document.getElementById('metric').value;
+    const holder   = document.getElementById('chartHolder');
+    holder.innerHTML = '<div class="spinner-border spinner-border-sm text-secondary"></div>';
+
+    const res  = await fetch(`/api/chart?subject=${subject}&activity=${activity}&metric=${metric}`);
+    const data = await res.json();
+
+    document.getElementById('chartTitle').textContent = `${subject} · ${activity} · ${metric}`;
+    const ds = data.datasets && data.datasets[0];
+    document.getElementById('chartMeta').textContent = ds ? `${ds.data.length} samples` : 'no data';
+
+    if (!ds || !ds.data.length) {
+      holder.innerHTML = '<span class="text-danger">No data for this combination.</span>';
+      document.getElementById('quickStats').innerHTML = '<span class="text-muted">No data.</span>';
+      return;
+    }
+
+    holder.innerHTML = '<canvas id="streamChart"></canvas>';
+    if (chart) chart.destroy();
+    chart = new Chart(document.getElementById('streamChart'), {
+      type: 'line',
+      data: {
+        labels: data.labels,
+        datasets: [{ label: ds.label, data: ds.data,
+          borderColor: '#1a1a2e', backgroundColor: 'rgba(26,26,46,.07)',
+          fill: true, tension: 0.2, pointRadius: 0, borderWidth: 1.5 }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false },
+                   tooltip: { mode: 'index', intersect: false } },
+        scales: {
+          x: { grid: { display: false }, ticks: { maxTicksLimit: 8, font: { size: 11 } } },
+          y: { grid: { color: 'rgba(0,0,0,.05)' }, ticks: { font: { size: 11 } } }
+        }
+      }
+    });
+
+    const stats = computeStats(ds.data);
+    if (stats) {
+      document.getElementById('quickStats').innerHTML =
+        kv('Samples', stats.n) + kv('Mean', stats.mean) + kv('Std dev', stats.std) +
+        kv('Min', stats.min) + kv('Max', stats.max);
+    }
+  }
+
+  document.getElementById('loadBtn').addEventListener('click', loadStream);
+  document.getElementById('subject').addEventListener('change', loadProfile);
+  loadProfile();
+  loadStream();
+</script>
+{% endblock %}

@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.env
+Wearable_Dataset.zip
+Wearable_Dataset/
+wearable_data.db.bak
+deliverables/images/*.png
+node_modules/
+.DS_Store

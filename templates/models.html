@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-header">
+  <h2>Model Results</h2>
+</div>
+
+{% for task, info in metrics.items() %}
+<div class="card mb-4">
+  <div class="card-header">{{ task.replace('_', ' ').title() }}</div>
+  <div class="card-body">
+    <div class="row g-4">
+      <div class="col-lg-6">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>Model</th>
+              {% if info.leaderboard[0].r2 is defined %}
+                <th>|R&sup2;|</th><th>MAE</th><th>RMSE</th>
+              {% else %}
+                <th>Accuracy</th><th>F1 (macro)</th><th>ROC-AUC</th>
+              {% endif %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in info.leaderboard %}
+            <tr {% if loop.first %}class="table-active"{% endif %}>
+              <td><code>{{ row.model }}</code></td>
+              {% if row.r2 is defined %}
+                <td>{{ "%.3f"|format(row.r2|abs) }}</td>
+                <td>{{ "%.3f"|format(row.mae) }}</td>
+                <td>{{ "%.3f"|format(row.rmse) }}</td>
+              {% else %}
+                <td>{{ "%.3f"|format(row.accuracy) }}</td>
+                <td>{{ "%.3f"|format(row.f1_macro) }}</td>
+                <td>{{ "%.3f"|format(row.roc_auc) if row.roc_auc == row.roc_auc else '—' }}</td>
+              {% endif %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="col-lg-6">
+        <canvas id="chart_{{ task }}" height="180"></canvas>
+      </div>
+    </div>
+  </div>
+</div>
+{% endfor %}
+
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const metrics = {{ metrics|tojson }};
+  for (const [task, info] of Object.entries(metrics)) {
+    const el = document.getElementById(`chart_${task}`);
+    if (!el) continue;
+    const isReg = 'r2' in info.leaderboard[0];
+    const useRmse = info.primary_metric === 'rmse';
+    const labels = info.leaderboard.map(r => r.model);
+    let datasets, yOpts;
+    if (!isReg) {
+      datasets = [
+        { label: 'Accuracy', data: info.leaderboard.map(r => r.accuracy),
+          backgroundColor: '#1a1a2e', borderRadius: 4 },
+        { label: 'F1 macro', data: info.leaderboard.map(r => r.f1_macro),
+          backgroundColor: '#6c757d', borderRadius: 4 },
+      ];
+      yOpts = { min: 0, max: 1, grid: { color: 'rgba(0,0,0,.05)' } };
+    } else if (useRmse) {
+      datasets = [{ label: 'RMSE', data: info.leaderboard.map(r => r.rmse),
+                    backgroundColor: '#1a1a2e', borderRadius: 4 }];
+      yOpts = { min: 0, grid: { color: 'rgba(0,0,0,.05)' } };
+    } else {
+      datasets = [{ label: '|R²|', data: info.leaderboard.map(r => Math.abs(r.r2)),
+                    backgroundColor: '#1a1a2e', borderRadius: 4 }];
+      yOpts = { min: 0, max: 1, grid: { color: 'rgba(0,0,0,.05)' } };
+    }
+    new Chart(el, {
+      type: 'bar',
+      data: { labels, datasets },
+      options: {
+        plugins: { legend: { labels: { font: { size: 11 } } } },
+        scales: { y: yOpts, x: { grid: { display: false } } }
+      }
+    });
+  }
+</script>
+{% endblock %}

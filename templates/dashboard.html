@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-header">
+  <h2>Wearable Health Analytics</h2>
+</div>
+
+<!-- Cohort overview -->
+<h6 class="text-uppercase text-muted mb-2" style="letter-spacing:.06em; font-size:.78rem;">Cohort Overview</h6>
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="stat-tile">
+      <div class="stat-label">Subjects</div>
+      <div class="stat-value">{{ demo.n_subjects or '—' }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="stat-tile">
+      <div class="stat-label">Male / Female</div>
+      <div class="stat-value">{{ demo.n_male or 0 }}<span class="stat-unit">/ {{ demo.n_female or 0 }}</span></div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="stat-tile">
+      <div class="stat-label">Age range</div>
+      <div class="stat-value">{{ demo.age_range or '—' }}<span class="stat-unit">yrs</span></div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="stat-tile">
+      <div class="stat-label">Mean age</div>
+      <div class="stat-value">{{ demo.mean_age or '—' }}<span class="stat-unit">yrs</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- Top models -->
+<div class="card mb-4">
+  <div class="card-header">Top Performing Models</div>
+  <div class="card-body">
+    {% if model_summary %}
+      <div class="row g-3">
+        {% for m in model_summary %}
+        <div class="col-md-4">
+          <div style="font-weight:600; font-size:.95rem; margin-bottom:.15rem;">{{ m.task.replace('_', ' ').title() }}</div>
+          <div style="color:#6c757d; font-size:.82rem; margin-bottom:.4rem;">{{ m.best_model }}</div>
+          <div class="score-bar-wrap">
+            <div class="score-bar" style="width: {{ [(m.score|abs * 100), 100]|min|round(1) }}%"></div>
+          </div>
+          <div style="font-size:.82rem; margin-top:.3rem; color:#495057;">{{ m.score_name }}: {{ "%.3f"|format(m.score|abs) }}</div>
+        </div>
+        {% endfor %}
+      </div>
+      <div class="mt-3">
+        <a href="/models" class="btn btn-outline-secondary btn-sm">Full leaderboard</a>
+      </div>
+    {% else %}
+      <p class="text-muted mb-0">Run <code>python models.py</code> to populate.</p>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Pipeline -->
+<div class="card">
+  <div class="card-header">Pipeline</div>
+  <div class="card-body py-3">
+    <div class="row align-items-start g-0">
+      {% set steps = [
+        ('1', 'PhysioNet CSVs',        'Raw wearable + demographic files'),
+        ('2', 'ETL to SQLite',         'Ingested into wearable_data.db'),
+        ('3', 'EM Imputation',         'Fills missing sensor and subject NaNs'),
+        ('4', 'Feature Engineering',   'HR, HRV, EDA, ACC stats per session'),
+        ('5', 'ML Models',             'RF, Ridge, Linear, LogReg'),
+        ('6', 'Flask Dashboard',       'Explore, evaluate, predict'),
+      ] %}
+      {% for num, title, desc in steps %}
+        <div class="col pipeline-step">
+          <div class="step-num">{{ num }}</div>
+          <div class="step-title">{{ title }}</div>
+          <div class="step-desc">{{ desc }}</div>
+        </div>
+        {% if not loop.last %}
+        <div class="col-auto pipeline-arrow">&#8250;</div>
+        {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}
