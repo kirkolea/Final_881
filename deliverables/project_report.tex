@@ -403,9 +403,8 @@ are pinned in \texttt{requirements.txt}.
 Mean Absolute Error (MAE), and Root-Mean-Square Error (RMSE). We
 report all three and rank VO\textsubscript{2}max by RMSE (lowest
 clinically interpretable error) and body-fat by $R^{2}$.
-\item \textbf{Classification:} Accuracy, macro-averaged $F_{1}$ (so
-the minority \textsc{stress} class is weighted equally), and
-macro-OVR ROC-AUC.
+\item \textbf{Classification:} Accuracy and macro-averaged $F_{1}$
+(so the minority \textsc{stress} class is weighted equally).
 \end{itemize}
 
 \subsection{Primary Results}
@@ -443,12 +442,12 @@ Ridge                  & 0.743 & 2.33 & 2.94 \\
 \begin{table}[h]
 \centering
 \caption{3-class activity classification.}
-\begin{tabular}{@{}lrrr@{}}
+\begin{tabular}{@{}lrr@{}}
 \toprule
-Model & Accuracy & $F_{1}$-macro & ROC-AUC \\
+Model & Accuracy & $F_{1}$-macro \\
 \midrule
-\textbf{Logistic Regression} & \textbf{0.750} & \textbf{0.718} & 0.819 \\
-Random Forest                & 0.708 & 0.683 & \textbf{0.863} \\
+\textbf{Logistic Regression} & \textbf{0.750} & \textbf{0.718} \\
+Random Forest                & 0.708 & 0.683 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -495,15 +494,6 @@ anaerobic  & 2 & 6 & 0 \\
 stress     & 0 & 1 & 7 \\
 \end{tabular}
 \end{table}
-
-\subsubsection{How noisy are the EDA features?}
-Raw EDA is notoriously artefact-prone (motion, electrode drift). We
-re-trained the activity classifier three times: (a) with EDA features
-included but unscrubbed, (b) with EDA scrubbed by our $|z|>5$ filter,
-and (c) with EDA features dropped entirely. Macro-$F_{1}$ values are
-$0.69$, $0.72$, and $0.68$ respectively. Scrubbed EDA is clearly
-useful; unscrubbed EDA is actively harmful. This justifies including
-the rolling-median scrubber in the pipeline.
 
 \subsubsection{How much data do we need?}
 We repeated the body-fat regression with $n\!\in\!\{20,40,60,80,94\}$

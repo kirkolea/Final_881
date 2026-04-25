@@ -1,10 +1,8 @@
 
 from __future__ import annotations
 
-import warnings
 import numpy as np
 import pandas as pd
-from scipy.stats import zscore
 
 
 def clean_subjects(df: pd.DataFrame):
@@ -149,20 +147,6 @@ def preprocess_table(df: pd.DataFrame, method: str = "em",normalize: bool = True
                 out[col] = (out[col] - lo) / (hi - lo)
 
     return out
-
-
-def scrub_sensor_stream(series: pd.Series, z_thresh: float = 5.0,
-                        rolling: int = 5) -> pd.Series:
- 
-    s = pd.to_numeric(series, errors="coerce")
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        z = zscore(s.fillna(s.median()), nan_policy="omit")
-    s = s.where(np.abs(z) < z_thresh)
-    s = s.ffill().bfill()
-    if rolling > 1:
-        s = s.rolling(rolling, min_periods=1, center=True).median()
-    return s
 
 
 if __name__ == "__main__":

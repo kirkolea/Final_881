@@ -523,13 +523,12 @@ function footer(slide, n) {
   const clsData = [
     { name: "Accuracy", labels: ["LogReg", "RandomForest"], values: [0.750, 0.708] },
     { name: "F1 macro", labels: ["LogReg", "RandomForest"], values: [0.718, 0.683] },
-    { name: "ROC-AUC",  labels: ["LogReg", "RandomForest"], values: [0.819, 0.863] },
   ];
   s.addChart(pres.ChartType.bar, clsData, {
     x: 0.6, y: 1.9, w: 8.0, h: 4.7,
     barDir: "col", showValue: false, barGrouping: "clustered",
     catAxisLabelFontSize: 13, valAxisLabelFontSize: 11, valAxisMinVal: 0, valAxisMaxVal: 1,
-    chartColors: [NAVY, CORAL, ICE], chartColorsOpacity: 100,
+    chartColors: [NAVY, CORAL], chartColorsOpacity: 100,
     showLegend: true, legendPos: "b", legendFontSize: 12,
   });
 
@@ -537,7 +536,6 @@ function footer(slide, n) {
   const cards = [
     ["0.750", "Best accuracy",    NAVY],
     ["0.718", "Best F1 (macro)",  NAVY],
-    ["0.863", "Best ROC-AUC",     NAVY],
   ];
   cards.forEach(([big, lbl, c], i) => {
     const y = 1.9 + i * 1.6;

@@ -7,7 +7,7 @@ from typing import Dict
 import numpy as np
 import pandas as pd
 
-from preprocessing import clean_subjects, preprocess_table, scrub_sensor_stream
+from preprocessing import clean_subjects, preprocess_table
 
 DB_NAME = "wearable_data.db"
 
@@ -30,7 +30,7 @@ def load_stream(table: str, subject: str, activity: str,
 
 
 def stats(series: pd.Series, prefix: str):
-    s = scrub_sensor_stream(series)
+    s = pd.to_numeric(series, errors="coerce").dropna()
     if s.empty:
         return {f"{prefix}_{k}": np.nan
                 for k in ("mean", "std", "min", "max", "p25", "p75", "range", "slope")}

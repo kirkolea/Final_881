@@ -4,7 +4,6 @@ from preprocessing import (
     em_impute,
     iterative_impute,
     preprocess_table,
-    scrub_sensor_stream,
 )
 
 __all__ = [
@@ -12,5 +11,4 @@ __all__ = [
     "em_impute",
     "iterative_impute",
     "preprocess_table",
-    "scrub_sensor_stream",
 ]

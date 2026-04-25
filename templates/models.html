@@ -18,7 +18,7 @@
               {% if info.leaderboard[0].r2 is defined %}
                 <th>|R&sup2;|</th><th>MAE</th><th>RMSE</th>
               {% else %}
-                <th>Accuracy</th><th>F1 (macro)</th><th>ROC-AUC</th>
+                <th>Accuracy</th><th>F1 (macro)</th>
               {% endif %}
             </tr>
           </thead>
@@ -33,7 +33,6 @@
               {% else %}
                 <td>{{ "%.3f"|format(row.accuracy) }}</td>
                 <td>{{ "%.3f"|format(row.f1_macro) }}</td>
-                <td>{{ "%.3f"|format(row.roc_auc) if row.roc_auc == row.roc_auc else '—' }}</td>
               {% endif %}
             </tr>
             {% endfor %}
